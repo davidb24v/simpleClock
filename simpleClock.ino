@@ -4,19 +4,19 @@
 /*
  Now we need a LedControl to work with.
  ***** These pin numbers will probably not work with your hardware *****
- pin 12 is connected to the DataIn 
- pin 11 is connected to the CLK 
- pin 10 is connected to LOAD 
+ pin 11 is connected to the DataIn 
+ pin 10 is connected to the CLK 
+ pin 9 is connected to LOAD 
  We have only a single MAX72XX.
  */
-LedControl lc=LedControl(12,11,10,1);
+LedControl lc=LedControl(11,10,9,1);
 
 int count = 0;
 int update = 0;
 int powerGood = 1;
 
-byte hours = 8;
-byte minutes = 37;
+byte hours = 0;
+byte minutes = 0;
 byte seconds = 0;
 
 #include <Button.h>        //https://github.com/JChristensen/Button
@@ -35,11 +35,19 @@ byte seconds = 0;
 Button cmdBtn(COMMAND_BUTTON, PULLUP, INVERT, DEBOUNCE_MS);    //Declare the button
 Button incBtn(INCR_BUTTON, PULLUP, INVERT, DEBOUNCE_MS);       //Declare the button
 
-enum {NORMAL, HOURS, MINUTES};
+enum {WAIT, START, HOURS, MINUTES};
+uint8_t STATE;
+
+bool digitState;
+int digitFlash = 250;
+long nextFlash = 0;
+byte powerJustOff = 0;
+byte powerJustOn = 0;
 
 void setup()
 {
   Serial.begin(115200);
+
   /*
    The MAX72XX is in power-saving mode on startup,
    we have to do a wakeup call
@@ -62,14 +70,102 @@ void setup()
 
 void loop()
 {
-  if ( update ) {
-    updateTime();
+  
+  if (powerJustOn) {
+      lc.shutdown(0,false);
+      lc.setIntensity(0,4);
+      lc.clearDisplay(0);
+      powerJustOn = 0;
+      Serial.println("Power restored");
+  }
+
+  if (powerJustOff) {
+      powerJustOff = 0;
+      Serial.println("Power Failure!");
+  }
+
+  if ( update && powerGood ) {
     update = 0;
-    if ( powerGood ) {
-      displayTime();
-      int CdS = analogRead(A0);
-      Serial.println(CdS);
-      lc.setIntensity(0,map(CdS,0,1023,0,15));
+    displayTime();
+    int CdS = analogRead(A0);
+    Serial.print(millis());
+    Serial.print(" ");
+    Serial.println(CdS);
+    lc.setIntensity(0,map(CdS,0,1023,0,15));
+  }
+
+  if ( powerGood ) {
+
+    long now = millis();
+    cmdBtn.read();
+    incBtn.read();
+
+    if ( nextFlash && (now > nextFlash) ) {
+      digitState = !digitState;
+      switch (STATE) {
+        case HOURS:
+          showHours();
+          break;
+        case MINUTES:
+          showMinutes();
+          break;
+      }
+      nextFlash = now + digitFlash;
+    }
+
+    switch (STATE) {
+      case WAIT:
+        if (cmdBtn.pressedFor(REPEAT_FIRST)) {
+          digitState = false;
+          showHours();
+          nextFlash = millis() + digitFlash;
+          detachInterrupt(0);
+          STATE = START;
+        }
+        break; 
+
+      case START:
+        if (cmdBtn.wasReleased()) {
+          STATE = HOURS;
+         }
+        break; 
+
+      case HOURS:
+        if (cmdBtn.wasReleased()) {
+          STATE = MINUTES;
+          digitState = true;
+          showHours();
+          digitState = false;
+          showMinutes();
+          nextFlash = millis() + digitFlash;
+          break;
+        }
+        if (incBtn.wasReleased()) {
+          hours++;
+          if ( hours == 24 ) {
+            hours = 0;
+          }
+          break;
+        }
+
+      case MINUTES:
+        if (cmdBtn.wasReleased()) {
+          STATE = WAIT;
+          seconds = 0;
+          count = 0;
+          attachInterrupt(0, clock, RISING);
+          displayTime();
+          nextFlash = 0;
+          break;
+        }
+        if (incBtn.wasReleased()) {
+          minutes++;
+          if ( minutes == 60 ) {
+            minutes = 0;
+          }
+          break;
+        }
+
     }
   }
 }
@@ -79,6 +175,19 @@ void clock()
   if ( ++count == 32767 ) {
     count = 0;
     update = 1;
+    // update variables
+    seconds++;
+    if ( seconds == 60 ) {
+      seconds = 0;
+      minutes++;
+      if ( minutes == 60 ) {
+        minutes = 0;
+        hours++;
+        if ( hours == 24 ) {
+          hours = 0;
+        }
+      }
+    }
   }
 }
 
@@ -92,20 +201,26 @@ void powerRestored() {
   attachInterrupt(1, powerFail, FALLING);
 }
 
-void updateTime() {
-  seconds++;
-  if ( seconds == 60 ) {
-    seconds = 0;
-    minutes++;
-    if ( minutes == 60 ) {
-      minutes = 0;
-      hours++;
-      if ( hours == 24 ) {
-        hours = 0;
-      }
-    }
+void showHours() {
+  if ( digitState ) {
+    lc.setDigit(0,0,hours/10,false);
+    lc.setDigit(0,1,hours % 10,false);
+  } else {
+    lc.setChar(0,0,' ',false);
+    lc.setChar(0,1,' ',false);
   }
 }
+    
+void showMinutes() {
+  if ( digitState ) {
+    lc.setDigit(0,2,minutes/10,false);
+    lc.setDigit(0,3,minutes % 10,false);
+  } else {
+    lc.setChar(0,2,' ',false);
+    lc.setChar(0,3,' ',false);
+  }
+}
+    
 
 void displayTime() {
   lc.setDigit(0,0,hours/10,false);

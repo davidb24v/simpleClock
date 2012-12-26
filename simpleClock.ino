@@ -1,5 +1,6 @@
 
 #include "LedControl.h"
+#include <TimerHelpers.h>
 
 /*
  Now we need a LedControl to work with.
@@ -44,9 +45,39 @@ long nextFlash = 0;
 byte powerJustOff = 0;
 byte powerJustOn = 0;
 
+// Reference voltage for this particular processor is 1.076V
+// See: http://www.gammon.com.au/forum/?id=11497 for
+// how to determine this value
+const int RefVoltage = 1076;
+
 void setup()
 {
   Serial.begin(115200);
+
+  // Wait for DS32KHz to settle
+  delay(1000);
+//  attachInterrupt(0, clock, RISING);
+  
+  // Detect if power has failed
+//  attachInterrupt(1, powerFail, FALLING);
+
+  TCCR1A = 0;        // reset timer 1
+  TCCR1B = 0;
+
+ // set up Timer 1
+  TCNT1 = 0;         // reset counter
+  OCR1A =  32767;       // compare A register value (1000 * clock speed)
+  
+  // Mode 4: CTC, top = OCR1A
+  Timer1::setMode (4, Timer1::T1_RISING,
+                                   Timer1::CLEAR_A_ON_COMPARE);
+
+  TIFR1 |= _BV (OCF1A);    // clear interrupt flag
+  TIMSK1 = _BV (OCIE1A);   // interrupt on Compare A Match  
+
+// Allow internal voltage to be measured...
+//analogReference(INTERNAL);
+//analogRead(A0);
 
   /*
    The MAX72XX is in power-saving mode on startup,
@@ -58,15 +89,26 @@ void setup()
   /* and clear the display */
   lc.clearDisplay(0);
 
-  // Wait for DS32KHz to settle
-  delay(1000);
-  attachInterrupt(0, clock, RISING);
-  
-  // Detect if power has failed
-  attachInterrupt(1, powerFail, FALLING);
-
-  displayTime();
 }
+
+ISR(TIMER1_COMPA_vect)
+{
+  seconds++;
+  if ( seconds == 60 ) {
+    seconds = 0;
+    minutes++;
+    if ( minutes == 60 ) {
+      minutes = 0;
+      hours++;
+      if ( hours == 24 ) {
+        hours = 0;
+      }
+    }
+  }
+  update = 1;
+}  // end of TIMER1_COMPA_vect
+  
+
 
 void loop()
 {
@@ -85,6 +127,7 @@ void loop()
   }
 
   if ( update && powerGood ) {
+    Serial.println(seconds);
     update = 0;
     displayTime();
     int CdS = analogRead(A0);
@@ -92,6 +135,10 @@ void loop()
     Serial.print(" ");
     Serial.println(CdS);
     lc.setIntensity(0,map(CdS,0,1023,0,15));
+    
+    int Vcc = analogRead(A1);
+    Serial.print("Vcc = ");
+    Serial.println(Vcc);
   }
 
   if ( powerGood ) {
@@ -226,6 +273,6 @@ void displayTime() {
   lc.setDigit(0,0,hours/10,false);
   lc.setDigit(0,1,hours % 10,false);
   lc.setDigit(0,2,minutes/10,false);
-  lc.setDigit(0,3,minutes % 10,false);
+  lc.setDigit(0,3,minutes % 10,false); 
 }
 
